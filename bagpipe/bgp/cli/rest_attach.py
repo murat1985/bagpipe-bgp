@@ -67,6 +67,15 @@ def create_veth_pair(vpn_interface, ns_interface, ns_name):
                (ns_name, ns_interface))
 
 
+def pidof_docker_container(container_id):
+    """ get PID """
+    (output, _) = runCommand(log, "docker inspect -f '{{.State.Pid}}' %s" % container_id)
+    if output[0] == "":
+        raise Exception("Docker container doesn't exist: %s" % output)
+    pid = output[0]
+    return pid
+
+
 def get_vpn2ns_if_name(namespace):
     return (VPN2NS_INTERFACE_PREFIX + namespace)[:LINUX_DEV_LEN]
 
@@ -82,13 +91,43 @@ def getNetNSInterfaceMac(namespace, interface):
 
     return mac
 
+def createNetNSlink(docker_container_pid):
+    """ Create netns direcotry if not exist """
+    netns_dir = '/var/run/netns'
+    if not os.path.exists(netns_dir):
+        os.makedirs(netns_dir)
+    else:
+        print 'netns path %s already exist, skipping' % netns_dir
+
+    netns_link = '/var/run/netns/%s' % docker_container_pid
+    netns_source = '/proc/%s/ns/net' % docker_container_pid
+    try:
+        if not os.path.lexists(netns_link):
+            """ Create a symbolic link for running docker container """
+            os.symlink(netns_source, netns_link)
+        else:
+            raise Exception("netns %s already exists, you can try to remove" \
+            "it: ip netns delete %s" % (docker_container_pid,docker_container_pid))
+    except:
+        raise Exception("Unable to create netns link")
+
+def deleteNetNSlink(docker_container_pid):
+    vpn2ns = get_vpn2ns_if_name(docker_container_pid)
+    try:
+        """ Remove a netns for running docker container """
+        runCommand(log, "ip netns delete %s" % docker_container_pid)
+        runCommand(log, "ip link delete %s" % vpn2ns)
+    except:
+        raise Exception("Can't remove netns %s doesn't exist"  % docker_container_pid)
+
 
 def createSpecialNetNSPort(options):
     print "Will plug local namespace %s into network" % options.netns
 
-    # create namespace
-    runCommand(log, "ip netns add %s" %
-               options.netns, raiseExceptionOnError=False)
+    # create namespace if we don't use docker
+    if not(options.docker_container_id):
+        runCommand(log, "ip netns add %s" %
+                   options.netns, raiseExceptionOnError=False)
 
     # create veth pair and move one into namespace
     if options.ovs_vlan:
@@ -138,6 +177,8 @@ def main():
                       help="UUID for the network instance "
                       "(default: %default-(ipvpn|evpn))",
                       default=DEFAULT_VPN_INSTANCE_ID)
+    parser.add_option("--docker-container-id", dest="docker_container_id",
+                      help="Identifier or name of running Docker container")
     parser.add_option("--port", dest="port",
                       help="local port to attach/detach (use special port "
                       "'netns[:if]' to have an interface to a local network "
@@ -240,8 +281,11 @@ def main():
         options.gw_ip = str(net[-2])
 
     if options.vpn_instance_id == DEFAULT_VPN_INSTANCE_ID:
-        options.vpn_instance_id = "%s-%s" % (
-            options.network_type, options.vpn_instance_id)
+        if options.docker_container_id:
+            options.vpn_instance_id = pidof_docker_container(options.docker_container_id)
+        else:
+            options.vpn_instance_id = "%s-%s" % (
+                options.network_type, options.vpn_instance_id)
 
     if options.port.startswith("netns"):
 
@@ -254,6 +298,8 @@ def main():
             options.if2netns = get_vpn2ns_if_name(options.netns)
 
         if options.operation == "attach":
+            if options.docker_container_id:
+                createNetNSlink(options.vpn_instance_id)
             createSpecialNetNSPort(options)
 
         options.port = options.if2netns
@@ -295,6 +341,10 @@ def main():
             parser.error("Need to specify --mac for an EVPN network "
                          "attachment if port is not 'netns'")
 
+    if options.operation == "detach":
+        if options.docker_container_id:
+            deleteNetNSlink(options.vpn_instance_id)
+
     readvertise = None
     if options.reAdvToRTs:
         readvertise = {"from_rt": options.reAdvFromRTs,
@@ -304,6 +354,7 @@ def main():
                             "export_rt":  exportRTs,
                             "local_port":  local_port,
                             "vpn_instance_id":  options.vpn_instance_id,
+                            "docker_container_id": options.docker_container_id,
                             "vpn_type":    options.network_type,
                             "gateway_ip":  options.gw_ip,
                             "mac_address": options.mac,

@@ -200,7 +200,7 @@ one of the veth to the VRF:
 
         bagpipe-rest-attach --attach --port netns --ip 12.11.11.2 --network-type ipvpn --vpn-instance-id test --rt 64512:78
 
-For this last example, assuming that you have configured bagpipe-bgp to use the `MPLSOVSDataplaneDriver` for IP VPN, you will actually
+For this example, assuming that you have configured bagpipe-bgp to use the `MPLSOVSDataplaneDriver` for IP VPN, you will actually
 be able to have traffic exchanged between the network namespaces:
 
     ip netns exec test ping 12.11.11.2
@@ -227,6 +227,33 @@ For this last example, assuming that you have configured bagpipe-bgp to use the 
 be able to have traffic exchanged between the network namespaces:
 
     ip netns exec test2 ping 12.11.11.2
+    PING 12.11.11.2 (12.11.11.2) 56(84) bytes of data.
+    64 bytes from 12.11.11.2: icmp_req=1 ttl=64 time=1.71 ms
+    64 bytes from 12.11.11.2: icmp_req=2 ttl=64 time=1.06 ms
+
+#### An E-VPN Docker Containers example ####
+
+In this example, bagpipe-rest-attach tool is used to link Docker containers together. Docker containers can live on the same host or
+on different hosts. Multiple containers can be connected to the same network.
+The bagpipe-rest-attach tool will be used to attach E-VPN instances to running Docker container based on its name or id:
+
+* on server A, create a docker container with --net none and plug a netns interface with IP 12.11.11.1
+into a new E-VPN named "test2", with route-target 64512:79
+
+        docker run --dti --net none --name test1 busybox
+
+        bagpipe-rest-attach --attach --port netns --ip 12.11.11.1 --network-type evpn --docker-container-id test1 --rt 64512:79
+
+* on server B, create a docker container named test2 and  plug a netns interface with IP 12.11.11.2 into a new E-VPN named "test2", with route-target 64512:79
+
+        docker run --dti --net none --name test2 busybox
+
+        bagpipe-rest-attach --attach --port netns --ip 12.11.11.2 --network-type evpn --docker-container-id test2 --rt 64512:79
+
+For this last example, assuming that you have configured bagpipe-bgp to use the `linux_vxlan.LinuxVXLANDataplaneDriver` for E-VPN, you will actually
+be able to have traffic exchanged between the Docker containers:
+
+    docker exec -ti test1 ping 12.11.11.2
     PING 12.11.11.2 (12.11.11.2) 56(84) bytes of data.
     64 bytes from 12.11.11.2: icmp_req=1 ttl=64 time=1.71 ms
     64 bytes from 12.11.11.2: icmp_req=2 ttl=64 time=1.06 ms
